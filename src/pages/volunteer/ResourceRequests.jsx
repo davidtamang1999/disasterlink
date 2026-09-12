@@ -3,15 +3,21 @@ import { useNavigate } from "react-router-dom";
 import VolunteerLayout from "../../layouts/VolunteerLayout";
 import { useDisaster } from "../../context/DisasterContext";
 import { useAuth } from "../../context/AuthContext";
+import { useResources } from "../../context/ResourceContext";
 import { useToast } from "../../components/shared";
 
 function ResourceRequests() {
   const navigate = useNavigate();
   const { incidents } = useDisaster();
   const { currentUser } = useAuth();
+  const {
+    requests,
+    createResourceRequest,
+    offerResourceToRequest,
+    loading: allocating,
+  } = useResources();
   const toast = useToast();
 
-  const [requests, setRequests] = useState([]);
   const [filteredRequests, setFilteredRequests] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -38,25 +44,16 @@ function ResourceRequests() {
     reason: "",
   });
 
-  // ---------- Load requests ----------
+  // ---------- Seed demo requests from incidents on first load ----------
   useEffect(() => {
-    loadRequests();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [incidents]);
+    if (requests.length > 0) return;
 
-  const loadRequests = () => {
-    const savedRequests = JSON.parse(localStorage.getItem("resourceRequests") || "[]");
+    // Only seed once per session — check a flag
+    const seeded = sessionStorage.getItem("resourceRequestsSeeded");
+    if (seeded) return;
 
-    if (savedRequests.length > 0) {
-      setRequests(savedRequests);
-      setFilteredRequests(savedRequests);
-      return;
-    }
-
-    const defaultRequests = [];
-
-    incidents.forEach((incident, index) => {
-      if (incident.status === "Resolved") return;
+    const seedDemoData = async () => {
+      sessionStorage.setItem("resourceRequestsSeeded", "1");
 
       const resourceTypes = [
         { type: "Drinking Water", icon: "water_drop", unit: "btls" },
@@ -67,145 +64,116 @@ function ResourceRequests() {
         { type: "Medical Supplies", icon: "local_hospital", unit: "supplies" },
       ];
 
-      const resource = resourceTypes[index % resourceTypes.length];
-      const required = Math.floor(Math.random() * 200) + 20;
-      const available = Math.floor(Math.random() * required * 0.5);
-      const shortage = required - available;
-      const priority =
-        shortage > required * 0.7 ? "Critical" :
-        shortage > required * 0.4 ? "High" : "Moderate";
+      const activeIncidents = incidents.filter((i) => i.status !== "Resolved");
 
-      defaultRequests.push({
-        id: `req-${Date.now()}-${index}`,
-        title: resource.type,
-        icon: resource.icon,
-        organization: `${incident.location?.split(",")[0] || "Local"} Response Team`,
-        location: incident.location || "Unknown location",
-        distance: `${(Math.random() * 8 + 0.5).toFixed(1)} km`,
-        time: `Req ${Math.floor(Math.random() * 6) + 1}h ago`,
-        required,
-        available,
-        shortage,
-        priority,
-        status: ["Pending", "Processing", "Fulfilled"][Math.floor(Math.random() * 3)],
-        unit: resource.unit,
-        color:
-          priority === "Critical" ? "#FF5252" :
-          priority === "High" ? "#FF9800" : "#EAB308",
-        bg:
-          priority === "Critical" ? "bg-[#FF5252]/10" :
-          priority === "High" ? "bg-[#FF9800]/10" : "bg-[#EAB308]/10",
-        text:
-          priority === "Critical" ? "text-[#FF5252]" :
-          priority === "High" ? "text-[#FF9800]" : "text-[#A16207]",
-        border:
-          priority === "Critical" ? "border-[#FF5252]" :
-          priority === "High" ? "border-[#FF9800]" : "border-[#EAB308]",
-        incidentId: incident.id,
-        createdAt: new Date().toISOString(),
-      });
-    });
+      if (activeIncidents.length > 0) {
+        for (let index = 0; index < Math.min(activeIncidents.length, 4); index++) {
+          const incident = activeIncidents[index];
+          const resource = resourceTypes[index % resourceTypes.length];
+          const required = Math.floor(Math.random() * 200) + 20;
+          const available = Math.floor(Math.random() * required * 0.5);
+          const shortage = required - available;
+          const priority =
+            shortage > required * 0.7
+              ? "Critical"
+              : shortage > required * 0.4
+              ? "High"
+              : "Moderate";
 
-    if (defaultRequests.length === 0) {
-      defaultRequests.push(
-        {
-          id: "req-001",
-          title: "Drinking Water Required",
-          icon: "water_drop",
-          organization: "Kathmandu Volunteer Response Team",
-          location: "Teku Response Center",
-          distance: "1.2 km",
-          time: "Req 15 min ago",
-          required: 500,
-          available: 120,
-          shortage: 380,
-          priority: "Critical",
-          status: "Processing",
-          unit: "btls",
-          color: "#FF5252",
-          bg: "bg-[#FF5252]/10",
-          text: "text-[#FF5252]",
-          border: "border-[#FF5252]",
-          incidentId: "inc-001",
-          createdAt: new Date().toISOString(),
-        },
-        {
-          id: "req-002",
-          title: "First Aid Kits",
-          icon: "medical_services",
-          organization: "Red Cross Patan Unit",
-          location: "Patan Relief Center",
-          distance: "3.4 km",
-          time: "Req 2h ago",
-          required: 40,
-          available: 12,
-          shortage: 28,
-          priority: "Critical",
-          status: "Processing",
-          unit: "kits",
-          color: "#FF5252",
-          bg: "bg-[#FF5252]/10",
-          text: "text-[#FF5252]",
-          border: "border-[#FF5252]",
-          incidentId: "inc-002",
-          createdAt: new Date().toISOString(),
-        },
-        {
-          id: "req-003",
-          title: "Food Packages",
-          icon: "restaurant",
-          organization: "Local Community Group",
-          location: "Baneshwor Shelter",
-          distance: "5.1 km",
-          time: "Req 4h ago",
-          required: 300,
-          available: 180,
-          shortage: 120,
-          priority: "High",
-          status: "Pending",
-          unit: "packages",
-          color: "#FF9800",
-          bg: "bg-[#FF9800]/10",
-          text: "text-[#FF9800]",
-          border: "border-[#FF9800]",
-          incidentId: "inc-003",
-          createdAt: new Date().toISOString(),
-        },
-        {
-          id: "req-004",
-          title: "Rescue Boats",
-          icon: "directions_boat",
-          organization: "Armed Police Force",
-          location: "Kalimati Flood Area",
-          distance: "2.8 km",
-          time: "Req 1h ago",
-          required: 8,
-          available: 5,
-          shortage: 3,
-          priority: "Moderate",
-          status: "Processing",
-          unit: "boats",
-          color: "#EAB308",
-          bg: "bg-[#EAB308]/10",
-          text: "text-[#A16207]",
-          border: "border-[#EAB308]",
-          incidentId: "inc-004",
-          createdAt: new Date().toISOString(),
+          const colorMap = {
+            Critical: { color: "#FF5252", bg: "bg-[#FF5252]/10", text: "text-[#FF5252]", border: "border-[#FF5252]" },
+            High: { color: "#FF9800", bg: "bg-[#FF9800]/10", text: "text-[#FF9800]", border: "border-[#FF9800]" },
+            Moderate: { color: "#EAB308", bg: "bg-[#EAB308]/10", text: "text-[#A16207]", border: "border-[#EAB308]" },
+          };
+          const colors = colorMap[priority];
+
+          await createResourceRequest({
+            title: resource.type,
+            icon: resource.icon,
+            organization: `${incident.location?.split(",")[0] || "Local"} Response Team`,
+            location: incident.location || "Unknown location",
+            distance: `${(Math.random() * 8 + 0.5).toFixed(1)} km`,
+            required,
+            available,
+            shortage,
+            priority,
+            status: ["Pending", "Processing", "Fulfilled"][Math.floor(Math.random() * 3)],
+            unit: resource.unit,
+            incidentId: incident.id,
+            ...colors,
+          });
         }
-      );
-    }
+      } else {
+        // Default demo requests if no incidents
+        const defaults = [
+          {
+            title: "Drinking Water Required",
+            icon: "water_drop",
+            organization: "Kathmandu Volunteer Response Team",
+            location: "Teku Response Center",
+            distance: "1.2 km",
+            required: 500,
+            available: 120,
+            shortage: 380,
+            priority: "Critical",
+            status: "Processing",
+            unit: "btls",
+            color: "#FF5252",
+            bg: "bg-[#FF5252]/10",
+            text: "text-[#FF5252]",
+            border: "border-[#FF5252]",
+          },
+          {
+            title: "First Aid Kits",
+            icon: "medical_services",
+            organization: "Red Cross Patan Unit",
+            location: "Patan Relief Center",
+            distance: "3.4 km",
+            required: 40,
+            available: 12,
+            shortage: 28,
+            priority: "Critical",
+            status: "Processing",
+            unit: "kits",
+            color: "#FF5252",
+            bg: "bg-[#FF5252]/10",
+            text: "text-[#FF5252]",
+            border: "border-[#FF5252]",
+          },
+          {
+            title: "Food Packages",
+            icon: "restaurant",
+            organization: "Local Community Group",
+            location: "Baneshwor Shelter",
+            distance: "5.1 km",
+            required: 300,
+            available: 180,
+            shortage: 120,
+            priority: "High",
+            status: "Pending",
+            unit: "packages",
+            color: "#FF9800",
+            bg: "bg-[#FF9800]/10",
+            text: "text-[#FF9800]",
+            border: "border-[#FF9800]",
+          },
+        ];
+        for (const d of defaults) {
+          await createResourceRequest(d);
+        }
+      }
+    };
 
-    localStorage.setItem("resourceRequests", JSON.stringify(defaultRequests));
-    setRequests(defaultRequests);
-    setFilteredRequests(defaultRequests);
-  };
+    seedDemoData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incidents, requests.length]);
 
-  // ---------- Filters ----------
-  const applyFilters = (list, search, type, priority, status) => {
-    let filtered = list;
+  // ---------- Apply filters whenever requests or filters change ----------
+  useEffect(() => {
+    let filtered = requests;
 
-    if (search) {
-      const q = search.toLowerCase();
+    if (searchTerm) {
+      const q = searchTerm.toLowerCase();
       filtered = filtered.filter(
         (r) =>
           r.title?.toLowerCase().includes(q) ||
@@ -214,43 +182,18 @@ function ResourceRequests() {
           r.id?.toLowerCase().includes(q)
       );
     }
-    if (type !== "all") filtered = filtered.filter((r) => r.title === type);
-    if (priority !== "all") filtered = filtered.filter((r) => r.priority === priority);
-    if (status !== "all") filtered = filtered.filter((r) => r.status === status);
+    if (typeFilter !== "all") filtered = filtered.filter((r) => r.title === typeFilter);
+    if (priorityFilter !== "all") filtered = filtered.filter((r) => r.priority === priorityFilter);
+    if (statusFilter !== "all") filtered = filtered.filter((r) => r.status === statusFilter);
 
     setFilteredRequests(filtered);
-  };
-
-  const handleSearch = (e) => {
-    const value = e.target.value;
-    setSearchTerm(value);
-    applyFilters(requests, value, typeFilter, priorityFilter, statusFilter);
-  };
-
-  const handleTypeFilter = (e) => {
-    const value = e.target.value;
-    setTypeFilter(value);
-    applyFilters(requests, searchTerm, value, priorityFilter, statusFilter);
-  };
-
-  const handlePriorityFilter = (e) => {
-    const value = e.target.value;
-    setPriorityFilter(value);
-    applyFilters(requests, searchTerm, typeFilter, value, statusFilter);
-  };
-
-  const handleStatusFilter = (e) => {
-    const value = e.target.value;
-    setStatusFilter(value);
-    applyFilters(requests, searchTerm, typeFilter, priorityFilter, value);
-  };
+  }, [requests, searchTerm, typeFilter, priorityFilter, statusFilter]);
 
   const clearFilters = () => {
     setSearchTerm("");
     setTypeFilter("all");
     setPriorityFilter("all");
     setStatusFilter("all");
-    setFilteredRequests(requests);
   };
 
   const resourceTypes = [...new Set(requests.map((r) => r.title))];
@@ -262,7 +205,7 @@ function ResourceRequests() {
   const activeRequests = requests.filter(
     (r) => r.status === "Processing" || r.status === "Pending"
   ).length;
-  const totalAvailable = requests.reduce((sum, r) => sum + r.available, 0);
+  const totalAvailable = requests.reduce((sum, r) => sum + (r.available || 0), 0);
   const fulfilledToday = requests.filter((r) => r.status === "Fulfilled").length;
 
   // ---------- Offer resource ----------
@@ -278,96 +221,60 @@ function ResourceRequests() {
     setOfferModalOpen(true);
   };
 
-  const confirmOffer = () => {
+  const confirmOffer = async () => {
     if (!selectedRequest || !offerFormData.quantity) {
       toast.error("Please enter a quantity to offer.");
       return;
     }
 
-    const updatedRequests = requests.map((r) => {
-      if (r.id !== selectedRequest.id) return r;
-
-      const offeredQuantity = parseInt(offerFormData.quantity);
-      const newAvailable = r.available + offeredQuantity;
-      const newShortage = r.required - newAvailable;
-
-      return {
-        ...r,
-        available: newAvailable,
-        shortage: Math.max(0, newShortage),
-        status: newShortage <= 0 ? "Fulfilled" : r.status,
-        offers: [
-          ...(r.offers || []),
-          {
-            quantity: offeredQuantity,
-            unit: offerFormData.unit,
-            location: offerFormData.location,
-            deliveryMethod: offerFormData.deliveryMethod,
-            deliveryTime: offerFormData.deliveryTime,
-            offeredBy: currentUser?.fullName || "Anonymous",
-            offeredAt: new Date().toISOString(),
-          },
-        ],
-      };
+    const updated = await offerResourceToRequest(selectedRequest.id, {
+      ...offerFormData,
+      offeredBy: currentUser?.fullName || "Anonymous",
     });
 
-    localStorage.setItem("resourceRequests", JSON.stringify(updatedRequests));
-    setRequests(updatedRequests);
-    setFilteredRequests(updatedRequests);
     setOfferModalOpen(false);
     setSelectedRequest(null);
 
     toast.success(
       `Resource offered successfully\n` +
-      `📦 ${offerFormData.quantity} ${offerFormData.unit}\n` +
-      `To: ${selectedRequest.title} — ${selectedRequest.location}`
+        `📦 ${offerFormData.quantity} ${offerFormData.unit}\n` +
+        `To: ${updated.title} — ${updated.location}`
     );
   };
 
   // ---------- Request resource ----------
-  const handleRequestResource = () => {
+  const handleRequestResource = async () => {
     if (!requestFormData.quantity || !requestFormData.destination) {
       toast.error("Please fill in all required fields.");
       return;
     }
 
-    const newRequest = {
-      id: `req-${Date.now()}`,
+    const colorMap = {
+      Critical: { color: "#FF5252", bg: "bg-[#FF5252]/10", text: "text-[#FF5252]", border: "border-[#FF5252]" },
+      High: { color: "#FF9800", bg: "bg-[#FF9800]/10", text: "text-[#FF9800]", border: "border-[#FF9800]" },
+      Moderate: { color: "#EAB308", bg: "bg-[#EAB308]/10", text: "text-[#A16207]", border: "border-[#EAB308]" },
+    };
+    const urgencyKey = requestFormData.urgency.split(" ")[0];
+    const colors = colorMap[urgencyKey] || colorMap.High;
+
+    await createResourceRequest({
       title: requestFormData.resourceType,
       icon: getIconForType(requestFormData.resourceType),
       organization: currentUser?.fullName || "Volunteer",
       location: requestFormData.destination,
       distance: "0 km",
-      time: "Just now",
       required: parseInt(requestFormData.quantity),
       available: 0,
       shortage: parseInt(requestFormData.quantity),
-      priority: requestFormData.urgency,
+      priority: urgencyKey,
       status: "Pending",
       unit: requestFormData.unit,
-      color:
-        requestFormData.urgency === "Critical" ? "#FF5252" :
-        requestFormData.urgency === "High" ? "#FF9800" : "#EAB308",
-      bg:
-        requestFormData.urgency === "Critical" ? "bg-[#FF5252]/10" :
-        requestFormData.urgency === "High" ? "bg-[#FF9800]/10" : "bg-[#EAB308]/10",
-      text:
-        requestFormData.urgency === "Critical" ? "text-[#FF5252]" :
-        requestFormData.urgency === "High" ? "text-[#FF9800]" : "text-[#A16207]",
-      border:
-        requestFormData.urgency === "Critical" ? "border-[#FF5252]" :
-        requestFormData.urgency === "High" ? "border-[#FF9800]" : "border-[#EAB308]",
       incidentId: requestFormData.incidentId,
-      createdAt: new Date().toISOString(),
       reason: requestFormData.reason,
-    };
+      ...colors,
+    });
 
-    const updatedRequests = [newRequest, ...requests];
-    localStorage.setItem("resourceRequests", JSON.stringify(updatedRequests));
-    setRequests(updatedRequests);
-    setFilteredRequests(updatedRequests);
     setRequestModalOpen(false);
-
     setRequestFormData({
       resourceType: "Drinking Water",
       quantity: "",
@@ -401,6 +308,10 @@ function ResourceRequests() {
       label: `${inc.title} (${inc.location})`,
     }));
 
+  const myOffers = requests.filter((r) =>
+    (r.offers || []).some((o) => o.offeredBy === currentUser?.fullName)
+  );
+
   // ---------- Header extras ----------
   const headerExtras = (
     <div className="relative hidden sm:block">
@@ -412,7 +323,7 @@ function ResourceRequests() {
         placeholder="Search resources..."
         className="w-64 rounded-full bg-[#edf0f5] py-2 pl-10 pr-4 text-sm outline-none transition focus:ring-2 focus:ring-[#4b41e1]/30"
         value={searchTerm}
-        onChange={handleSearch}
+        onChange={(e) => setSearchTerm(e.target.value)}
       />
     </div>
   );
@@ -464,7 +375,7 @@ function ResourceRequests() {
           {/* LEFT */}
           <div className="space-y-8 xl:col-span-2">
 
-            {/* Critical shortage */}
+            {/* Critical shortages */}
             {requests.filter((r) => r.priority === "Critical" && r.status !== "Fulfilled").length > 0 && (
               <section>
                 <div className="mb-4 flex items-center gap-2">
@@ -571,14 +482,14 @@ function ResourceRequests() {
                     placeholder="Search requests..."
                     className="w-full rounded-lg bg-[#f5f7fb] py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-[#4b41e1]/20"
                     value={searchTerm}
-                    onChange={handleSearch}
+                    onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
 
                 <select
                   className="rounded-lg bg-[#f5f7fb] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#4b41e1]/20"
                   value={typeFilter}
-                  onChange={handleTypeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
                 >
                   <option value="all">All Types</option>
                   {resourceTypes.map((type) => (
@@ -589,7 +500,7 @@ function ResourceRequests() {
                 <select
                   className="rounded-lg bg-[#f5f7fb] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#4b41e1]/20"
                   value={priorityFilter}
-                  onChange={handlePriorityFilter}
+                  onChange={(e) => setPriorityFilter(e.target.value)}
                 >
                   <option value="all">Priority</option>
                   {priorities.map((p) => (
@@ -600,7 +511,7 @@ function ResourceRequests() {
                 <select
                   className="rounded-lg bg-[#f5f7fb] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#4b41e1]/20"
                   value={statusFilter}
-                  onChange={handleStatusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
                 >
                   <option value="all">Status</option>
                   {statuses.map((s) => (
@@ -702,70 +613,73 @@ function ResourceRequests() {
               </h3>
 
               <div className="rounded-[20px] bg-white p-5 shadow-sm">
-                {requests.some((r) => r.offers?.some((o) => o.offeredBy === currentUser?.fullName)) ? (
-                  requests
-                    .filter((r) => r.offers?.some((o) => o.offeredBy === currentUser?.fullName))
-                    .slice(0, 2)
-                    .map((request) => {
-                      const offer = request.offers.find((o) => o.offeredBy === currentUser?.fullName);
-                      return (
-                        <div key={request.id} className="mb-4 rounded-xl border border-gray-200 p-5 last:mb-0">
-                          <div className="flex flex-col justify-between gap-3 sm:flex-row">
-                            <div>
-                              <h4 className="font-semibold">
-                                {offer?.quantity || 0} {request.unit || "units"} {request.title}
-                              </h4>
-                              <p className="mt-1 text-xs text-[#76767f]">
-                                To: {request.location} (Req: {request.id})
-                              </p>
-                            </div>
-                            <span className="h-fit rounded-full bg-[#4b41e1]/10 px-3 py-1 text-xs font-semibold text-[#4b41e1]">
-                              {request.status === "Fulfilled" ? "Delivered" : "En Route"}
-                            </span>
+                {myOffers.length > 0 ? (
+                  myOffers.slice(0, 2).map((request) => {
+                    const offer = request.offers.find(
+                      (o) => o.offeredBy === currentUser?.fullName
+                    );
+                    return (
+                      <div key={request.id} className="mb-4 rounded-xl border border-gray-200 p-5 last:mb-0">
+                        <div className="flex flex-col justify-between gap-3 sm:flex-row">
+                          <div>
+                            <h4 className="font-semibold">
+                              {offer?.quantity || 0} {request.unit || "units"} {request.title}
+                            </h4>
+                            <p className="mt-1 text-xs text-[#76767f]">
+                              To: {request.location} (Req: {request.id})
+                            </p>
+                          </div>
+                          <span className="h-fit rounded-full bg-[#4b41e1]/10 px-3 py-1 text-xs font-semibold text-[#4b41e1]">
+                            {request.status === "Fulfilled" ? "Delivered" : "En Route"}
+                          </span>
+                        </div>
+
+                        <div className="relative mt-8">
+                          <div className="absolute left-0 top-3 h-1 w-full bg-gray-200">
+                            <div
+                              className={`h-full ${
+                                request.status === "Fulfilled" ? "w-full" : "w-1/2"
+                              } bg-[#4b41e1]`}
+                            />
                           </div>
 
-                          <div className="relative mt-8">
-                            <div className="absolute left-0 top-3 h-1 w-full bg-gray-200">
-                              <div
-                                className={`h-full ${
-                                  request.status === "Fulfilled" ? "w-full" : "w-1/2"
-                                } bg-[#4b41e1]`}
-                              />
-                            </div>
-
-                            <div className="relative z-10 flex justify-between">
-                              {[
-                                ["check", "Offered", true],
-                                ["check", "Accepted", request.status !== "Pending"],
-                                ["local_shipping", "En Route", request.status === "Processing" || request.status === "Fulfilled"],
-                                ["inventory", "Delivered", request.status === "Fulfilled"],
-                                ["done_all", "Confirmed", request.status === "Fulfilled"],
-                              ].map(([icon, label, active]) => (
-                                <div key={label} className="flex flex-col items-center bg-white px-1">
-                                  <div
-                                    className={`flex h-7 w-7 items-center justify-center rounded-full border-2 ${
-                                      active
-                                        ? "border-[#4b41e1] bg-[#4b41e1] text-white"
-                                        : "border-gray-300 bg-white text-gray-400"
-                                    }`}
-                                  >
-                                    <span className="material-symbols-outlined text-[15px]">{icon}</span>
-                                  </div>
-                                  <span className="mt-2 text-[9px] text-[#45464e]">{label}</span>
+                          <div className="relative z-10 flex justify-between">
+                            {[
+                              ["check", "Offered", true],
+                              ["check", "Accepted", request.status !== "Pending"],
+                              [
+                                "local_shipping",
+                                "En Route",
+                                request.status === "Processing" || request.status === "Fulfilled",
+                              ],
+                              ["inventory", "Delivered", request.status === "Fulfilled"],
+                              ["done_all", "Confirmed", request.status === "Fulfilled"],
+                            ].map(([icon, label, active]) => (
+                              <div key={label} className="flex flex-col items-center bg-white px-1">
+                                <div
+                                  className={`flex h-7 w-7 items-center justify-center rounded-full border-2 ${
+                                    active
+                                      ? "border-[#4b41e1] bg-[#4b41e1] text-white"
+                                      : "border-gray-300 bg-white text-gray-400"
+                                  }`}
+                                >
+                                  <span className="material-symbols-outlined text-[15px]">{icon}</span>
                                 </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="mt-6 flex items-center justify-between border-t border-gray-200 pt-4 text-xs text-[#76767f]">
-                            <span>Est. Arrival: {offer?.deliveryTime || "Today, 14:30"}</span>
-                            <button className="font-semibold text-[#4b41e1] hover:underline">
-                              Update Status
-                            </button>
+                                <span className="mt-2 text-[9px] text-[#45464e]">{label}</span>
+                              </div>
+                            ))}
                           </div>
                         </div>
-                      );
-                    })
+
+                        <div className="mt-6 flex items-center justify-between border-t border-gray-200 pt-4 text-xs text-[#76767f]">
+                          <span>Est. Arrival: {offer?.deliveryTime || "Today, 14:30"}</span>
+                          <button className="font-semibold text-[#4b41e1] hover:underline">
+                            Update Status
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
                 ) : (
                   <div className="py-8 text-center text-[#45464e]">
                     <span className="material-symbols-outlined mb-2 block text-4xl text-gray-300">
@@ -781,11 +695,13 @@ function ResourceRequests() {
 
           {/* RIGHT SIDEBAR */}
           <div className="space-y-6">
-            {/* Resource Map */}
             <section className="overflow-hidden rounded-[20px] bg-white shadow-sm">
               <div className="flex items-center justify-between border-b border-gray-200 p-5">
                 <h3 className="font-['Space_Grotesk'] text-lg font-bold">Resource Map</h3>
-                <button onClick={() => navigate("/volunteer/incident-map")} className="text-[#4b41e1]">
+                <button
+                  onClick={() => navigate("/volunteer/incident-map")}
+                  className="text-[#4b41e1]"
+                >
                   <span className="material-symbols-outlined">open_in_full</span>
                 </button>
               </div>
@@ -804,12 +720,13 @@ function ResourceRequests() {
                 <div className="flex h-full flex-col items-center justify-center">
                   <span className="material-symbols-outlined text-6xl text-[#4b41e1]/30">map</span>
                   <p className="mt-3 font-semibold text-[#45464e]">Kathmandu Resource Map</p>
-                  <p className="mt-1 text-xs text-[#76767f]">{filteredRequests.length} active requests nearby</p>
+                  <p className="mt-1 text-xs text-[#76767f]">
+                    {filteredRequests.length} active requests nearby
+                  </p>
                 </div>
               </div>
             </section>
 
-            {/* Available Nearby */}
             <section>
               <h3 className="mb-4 font-['Space_Grotesk'] text-xl font-bold">Available Nearby</h3>
               <div className="space-y-4">
@@ -836,7 +753,9 @@ function ResourceRequests() {
 
                       <div className="mt-4 flex gap-4 text-sm">
                         <span className="flex items-center gap-1">
-                          <span className="material-symbols-outlined text-[15px] text-[#76767f]">inventory_2</span>
+                          <span className="material-symbols-outlined text-[15px] text-[#76767f]">
+                            inventory_2
+                          </span>
                           {request.available} {request.unit || "units"}
                         </span>
                         <span className="flex items-center gap-1 text-[#76767f]">
@@ -968,15 +887,17 @@ function ResourceRequests() {
             <div className="mt-6 flex justify-end gap-3 border-t border-gray-200 pt-5">
               <button
                 onClick={() => setOfferModalOpen(false)}
-                className="rounded-xl px-5 py-2.5 font-semibold text-[#45464e] hover:bg-gray-100"
+                disabled={allocating}
+                className="rounded-xl px-5 py-2.5 font-semibold text-[#45464e] hover:bg-gray-100 disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmOffer}
-                className="rounded-xl bg-[#4b41e1] px-5 py-2.5 font-semibold text-white transition hover:bg-[#645efb]"
+                disabled={allocating}
+                className="rounded-xl bg-[#4b41e1] px-5 py-2.5 font-semibold text-white transition hover:bg-[#645efb] disabled:opacity-50"
               >
-                Confirm Offer
+                {allocating ? "Submitting..." : "Confirm Offer"}
               </button>
             </div>
           </div>
@@ -1005,7 +926,9 @@ function ResourceRequests() {
                   <select
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-[#4b41e1]/30"
                     value={requestFormData.resourceType}
-                    onChange={(e) => setRequestFormData({ ...requestFormData, resourceType: e.target.value })}
+                    onChange={(e) =>
+                      setRequestFormData({ ...requestFormData, resourceType: e.target.value })
+                    }
                   >
                     <option>Drinking Water</option>
                     <option>Food Packages</option>
@@ -1023,7 +946,9 @@ function ResourceRequests() {
                       placeholder="Amount"
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-[#4b41e1]/30"
                       value={requestFormData.quantity}
-                      onChange={(e) => setRequestFormData({ ...requestFormData, quantity: e.target.value })}
+                      onChange={(e) =>
+                        setRequestFormData({ ...requestFormData, quantity: e.target.value })
+                      }
                     />
                   </FormField>
 
@@ -1033,7 +958,9 @@ function ResourceRequests() {
                       placeholder="e.g. Kits"
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-[#4b41e1]/30"
                       value={requestFormData.unit}
-                      onChange={(e) => setRequestFormData({ ...requestFormData, unit: e.target.value })}
+                      onChange={(e) =>
+                        setRequestFormData({ ...requestFormData, unit: e.target.value })
+                      }
                     />
                   </FormField>
                 </div>
@@ -1043,7 +970,9 @@ function ResourceRequests() {
                 <select
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-[#4b41e1]/30"
                   value={requestFormData.incidentId}
-                  onChange={(e) => setRequestFormData({ ...requestFormData, incidentId: e.target.value })}
+                  onChange={(e) =>
+                    setRequestFormData({ ...requestFormData, incidentId: e.target.value })
+                  }
                 >
                   <option value="">Select an incident</option>
                   {incidentOptions.map((inc) => (
@@ -1059,7 +988,9 @@ function ResourceRequests() {
                   placeholder="Enter destination location..."
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-[#4b41e1]/30"
                   value={requestFormData.destination}
-                  onChange={(e) => setRequestFormData({ ...requestFormData, destination: e.target.value })}
+                  onChange={(e) =>
+                    setRequestFormData({ ...requestFormData, destination: e.target.value })
+                  }
                 />
               </FormField>
 
@@ -1068,7 +999,9 @@ function ResourceRequests() {
                   <select
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-[#4b41e1]/30"
                     value={requestFormData.urgency}
-                    onChange={(e) => setRequestFormData({ ...requestFormData, urgency: e.target.value })}
+                    onChange={(e) =>
+                      setRequestFormData({ ...requestFormData, urgency: e.target.value })
+                    }
                   >
                     <option>Critical (Immediate)</option>
                     <option>High (Within 4 hrs)</option>
@@ -1082,7 +1015,9 @@ function ResourceRequests() {
                     type="datetime-local"
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-[#4b41e1]/30"
                     value={requestFormData.requiredBy}
-                    onChange={(e) => setRequestFormData({ ...requestFormData, requiredBy: e.target.value })}
+                    onChange={(e) =>
+                      setRequestFormData({ ...requestFormData, requiredBy: e.target.value })
+                    }
                   />
                 </FormField>
               </div>
@@ -1092,7 +1027,9 @@ function ResourceRequests() {
                   placeholder="Briefly describe why these resources are needed..."
                   className="h-28 w-full resize-none rounded-lg border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-[#4b41e1]/30"
                   value={requestFormData.reason}
-                  onChange={(e) => setRequestFormData({ ...requestFormData, reason: e.target.value })}
+                  onChange={(e) =>
+                    setRequestFormData({ ...requestFormData, reason: e.target.value })
+                  }
                 />
               </FormField>
             </div>
@@ -1100,15 +1037,17 @@ function ResourceRequests() {
             <div className="mt-6 flex justify-end gap-3 border-t border-gray-200 pt-5">
               <button
                 onClick={() => setRequestModalOpen(false)}
-                className="rounded-xl px-5 py-2.5 font-semibold text-[#45464e] hover:bg-gray-100"
+                disabled={allocating}
+                className="rounded-xl px-5 py-2.5 font-semibold text-[#45464e] hover:bg-gray-100 disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleRequestResource}
-                className="rounded-xl bg-[#4b41e1] px-5 py-2.5 font-semibold text-white transition hover:bg-[#645efb]"
+                disabled={allocating}
+                className="rounded-xl bg-[#4b41e1] px-5 py-2.5 font-semibold text-white transition hover:bg-[#645efb] disabled:opacity-50"
               >
-                Submit Request
+                {allocating ? "Submitting..." : "Submit Request"}
               </button>
             </div>
           </div>

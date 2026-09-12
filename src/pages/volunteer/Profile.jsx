@@ -2,15 +2,17 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import VolunteerLayout from "../../layouts/VolunteerLayout";
 import { useAuth } from "../../context/AuthContext";
+import { useUsers } from "../../context/UserContext";
 import { useDisaster } from "../../context/DisasterContext";
+import { useToast } from "../../components/shared";
 
 function Profile() {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const { users, updateUser, getInitials } = useUsers();
   const { incidents } = useDisaster();
+  const toast = useToast();
 
-  const [userData, setUserData] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
   const [newAvailability, setNewAvailability] = useState("Available");
   const [showEditModal, setShowEditModal] = useState(false);
@@ -25,40 +27,28 @@ function Profile() {
     emergencyPhone: "",
   });
 
-  // ---------- Load user data ----------
+  // ---------- Find this user in the shared context ----------
+  const userData = users.find((u) => u.id === currentUser?.id) || null;
+
+  // ---------- Redirect if not logged in ----------
   useEffect(() => {
-    if (!currentUser) {
-      navigate("/login");
-      return;
-    }
-
-    const allUsers = JSON.parse(localStorage.getItem("users") || "[]");
-    const user = allUsers.find((u) => u.id === currentUser.id);
-    const source = user || currentUser;
-
-    setUserData({
-      ...source,
-      skills: source.skills || ["Flood Rescue", "Evacuation Assistance", "First Aid"],
-      preferredAreas: source.preferredAreas || ["Kathmandu", "Lalitpur", "Bhaktapur"],
-      maxTravelDistance: source.maxTravelDistance || "5 km",
-      emergencyContact: source.emergencyContact || "Not set",
-      emergencyPhone: source.emergencyPhone || "N/A",
-      memberSince: source.createdAt || new Date().toISOString(),
-    });
-
-    setEditFormData({
-      fullName: source.fullName || "",
-      phone: source.phone || "",
-      location: source.location || "",
-      skills: source.skills || ["Flood Rescue", "Evacuation Assistance", "First Aid"],
-      preferredAreas: source.preferredAreas || ["Kathmandu", "Lalitpur", "Bhaktapur"],
-      maxTravelDistance: source.maxTravelDistance || "5 km",
-      emergencyContact: source.emergencyContact || "Not set",
-      emergencyPhone: source.emergencyPhone || "N/A",
-    });
-
-    setLoading(false);
+    if (!currentUser) navigate("/login");
   }, [currentUser, navigate]);
+
+  // ---------- Sync edit form when userData changes ----------
+  useEffect(() => {
+    if (!userData) return;
+    setEditFormData({
+      fullName: userData.fullName || "",
+      phone: userData.phone || "",
+      location: userData.location || "",
+      skills: userData.skills || ["Flood Rescue", "Evacuation Assistance", "First Aid"],
+      preferredAreas: userData.preferredAreas || ["Kathmandu", "Lalitpur", "Bhaktapur"],
+      maxTravelDistance: userData.maxTravelDistance || "5 km",
+      emergencyContact: userData.emergencyContact || "",
+      emergencyPhone: userData.emergencyPhone || "",
+    });
+  }, [userData]);
 
   // ---------- Derived helpers ----------
   const getAssignedIncidents = () =>
@@ -73,9 +63,6 @@ function Profile() {
 
   const getCompletedTasks = () =>
     getAssignedIncidents().filter((inc) => inc.status === "Resolved");
-
-  const getActiveTasks = () =>
-    getAssignedIncidents().filter((inc) => inc.status !== "Resolved");
 
   const getPeopleAssisted = () =>
     getAssignedIncidents().reduce(
@@ -101,48 +88,24 @@ function Profile() {
   };
 
   const getMemberSince = () => {
-    if (!userData?.memberSince) return "Jan 2026";
-    const date = new Date(userData.memberSince);
+    if (!userData?.createdAt) return "Jan 2026";
+    const date = new Date(userData.createdAt);
     return date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
   };
 
   // ---------- Mutations ----------
-  const toggleAvailability = (newStatus) => {
+  const toggleAvailability = async (newStatus) => {
     if (!userData) return;
-
-    const allUsers = JSON.parse(localStorage.getItem("users") || "[]");
-    const updatedUsers = allUsers.map((u) =>
-      u.id === userData.id ? { ...u, status: newStatus } : u
-    );
-    localStorage.setItem("users", JSON.stringify(updatedUsers));
-
-    const currentUserData = JSON.parse(localStorage.getItem("currentUser") || "{}");
-    if (currentUserData.id === userData.id) {
-      currentUserData.status = newStatus;
-      localStorage.setItem("currentUser", JSON.stringify(currentUserData));
-    }
-
-    setUserData({ ...userData, status: newStatus });
+    await updateUser(userData.id, { status: newStatus });
     setShowAvailabilityModal(false);
+    toast.success(`Availability updated to ${newStatus}`);
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!userData) return;
-
-    const allUsers = JSON.parse(localStorage.getItem("users") || "[]");
-    const updatedUsers = allUsers.map((u) =>
-      u.id === userData.id ? { ...u, ...editFormData } : u
-    );
-    localStorage.setItem("users", JSON.stringify(updatedUsers));
-
-    const currentUserData = JSON.parse(localStorage.getItem("currentUser") || "{}");
-    if (currentUserData.id === userData.id) {
-      const updatedCurrentUser = updatedUsers.find((u) => u.id === userData.id);
-      localStorage.setItem("currentUser", JSON.stringify(updatedCurrentUser));
-    }
-
-    setUserData({ ...userData, ...editFormData });
+    await updateUser(userData.id, { ...editFormData });
     setShowEditModal(false);
+    toast.success("Profile updated successfully");
   };
 
   const toggleSkill = (skill) => {
@@ -178,13 +141,15 @@ function Profile() {
   const availableAreas = ["Kathmandu", "Lalitpur", "Bhaktapur", "Pokhara", "Chitwan"];
   const distanceOptions = ["1 km", "3 km", "5 km", "10 km", "Any Distance"];
 
-  // ---------- Loading ----------
-  if (loading) {
+  // ---------- Loading / not found ----------
+  if (!currentUser) return null;
+
+  if (!userData) {
     return (
       <VolunteerLayout title="My Profile">
         <div className="flex items-center justify-center py-32">
           <div className="text-center">
-            <div className="mx-auto mb-4 h-16 w-16 animate-spin rounded-full border-4 border-[#4648d4] border-t-transparent"></div>
+            <div className="mx-auto mb-4 h-16 w-16 animate-spin rounded-full border-4 border-[#4648d4] border-t-transparent" />
             <p className="text-gray-500">Loading profile...</p>
           </div>
         </div>
@@ -192,16 +157,13 @@ function Profile() {
     );
   }
 
-  if (!userData) return null;
-
-  const activeTasks = getActiveTasks();
   const completedTasks = getCompletedTasks();
   const peopleAssisted = getPeopleAssisted();
   const responseHours = getResponseHours();
   const reliabilityScore = getReliabilityScore();
   const assignedIncidents = getAssignedIncidents();
 
-  const recentActivity = assignedIncidents
+  const recentActivity = [...assignedIncidents]
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
     .slice(0, 5);
 
@@ -248,12 +210,10 @@ function Profile() {
           <div className="pointer-events-none absolute right-0 top-0 h-64 w-64 -translate-y-1/2 translate-x-1/4 rounded-full bg-[#4648d4]/5 blur-3xl" />
 
           <div className="relative z-10 flex flex-col items-start gap-6 md:flex-row md:items-center">
-            {/* Avatar */}
             <div className="flex h-28 w-28 flex-shrink-0 items-center justify-center overflow-hidden rounded-2xl border-4 border-white bg-[#4648d4]/10 text-5xl font-bold text-[#4648d4] shadow-md ring-1 ring-[#c6c6cf] md:h-40 md:w-40">
               {initials}
             </div>
 
-            {/* Details */}
             <div className="flex-1">
               <div className="mb-1 flex flex-wrap items-center gap-3">
                 <h3 className="text-3xl font-bold">{userData.fullName || "Volunteer"}</h3>
@@ -279,7 +239,6 @@ function Profile() {
               </div>
             </div>
 
-            {/* Availability card */}
             <AvailabilityCard
               userData={userData}
               onOpen={() => setShowAvailabilityModal(true)}
@@ -292,7 +251,6 @@ function Profile() {
           {/* LEFT COLUMN */}
           <div className="space-y-6 lg:col-span-7">
 
-            {/* Personal info */}
             <Card title="Personal Information" icon="badge" onEdit={() => setShowEditModal(true)}>
               <div className="mb-8 grid grid-cols-1 gap-x-12 gap-y-6 sm:grid-cols-2">
                 <div className="space-y-6">
@@ -325,7 +283,6 @@ function Profile() {
               </div>
             </Card>
 
-            {/* Skills */}
             <Card title="Response Skills" icon="build">
               <div className="flex flex-wrap gap-3">
                 {(userData.skills || []).map((skill) => (
@@ -348,7 +305,6 @@ function Profile() {
               </div>
             </Card>
 
-            {/* Recent activity */}
             <Card title="Recent Activity" icon="history">
               <div className="relative space-y-6 before:absolute before:bottom-2 before:left-[11px] before:top-2 before:w-0.5 before:bg-[#eae7eb]">
                 {recentActivity.length > 0 ? (
@@ -368,12 +324,9 @@ function Profile() {
                           {incident.status === "In Progress" && "sync"}
                           {incident.status === "Pending" && "pending"}
                           {incident.status === "Assigned" && "assignment"}
-                          {![
-                            "Resolved",
-                            "In Progress",
-                            "Pending",
-                            "Assigned",
-                          ].includes(incident.status) && "task"}
+                          {!["Resolved", "In Progress", "Pending", "Assigned"].includes(
+                            incident.status
+                          ) && "task"}
                         </span>
                       </div>
 
@@ -400,9 +353,7 @@ function Profile() {
                       history
                     </span>
                     <p>No recent activity</p>
-                    <p className="text-sm">
-                      You haven't been assigned to any incidents yet
-                    </p>
+                    <p className="text-sm">You haven't been assigned to any incidents yet</p>
                   </div>
                 )}
               </div>
@@ -411,8 +362,6 @@ function Profile() {
 
           {/* RIGHT COLUMN */}
           <div className="space-y-6 lg:col-span-5">
-
-            {/* Impact metrics */}
             <div className="relative overflow-hidden rounded-[20px] bg-[#0e1a39] p-6 text-white shadow-md">
               <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-[#4648d4]/30 via-transparent to-transparent" />
 
@@ -439,7 +388,6 @@ function Profile() {
               </div>
             </div>
 
-            {/* Preferred areas */}
             <Card title="Preferred Response Areas" icon="map">
               <div className="mb-8 grid grid-cols-1 gap-3">
                 {(userData.preferredAreas || ["Kathmandu", "Lalitpur", "Bhaktapur"]).map(
@@ -472,7 +420,6 @@ function Profile() {
               </div>
             </Card>
 
-            {/* Verification */}
             <Card
               title="Verification"
               icon="verified"

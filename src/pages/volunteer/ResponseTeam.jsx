@@ -2,10 +2,12 @@ import { useState, useEffect } from "react";
 import VolunteerLayout from "../../layouts/VolunteerLayout";
 import { useDisaster } from "../../context/DisasterContext";
 import { useAuth } from "../../context/AuthContext";
+import { useUsers } from "../../context/UserContext";
 
 function ResponseTeam() {
   const { incidents } = useDisaster();
   const { currentUser } = useAuth();
+  const { volunteers } = useUsers();
 
   const [teamMembers, setTeamMembers] = useState([]);
   const [operations, setOperations] = useState([]);
@@ -18,17 +20,14 @@ function ResponseTeam() {
     offline: 0,
   });
 
-  // Load team data
+  // Load team data whenever volunteers change
   useEffect(() => {
     loadTeamData();
-    generateActivities();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [incidents]);
+  }, [volunteers, incidents]);
 
   const loadTeamData = () => {
-    const allUsers = JSON.parse(localStorage.getItem("users") || "[]");
-    const volunteers = allUsers.filter((u) => u.role === "volunteer");
-
+    // If no volunteers, fall back to default demo data
     if (volunteers.length === 0) {
       setDefaultTeamData();
       return;
@@ -55,6 +54,7 @@ function ResponseTeam() {
       };
     });
 
+    // Ensure a team leader exists
     if (members.length > 0 && !members.find((m) => m.status === "Team Leader")) {
       const leader = members[0];
       leader.status = "Leader";
@@ -132,14 +132,15 @@ function ResponseTeam() {
   };
 
   const calculateTeamStats = (members) => {
-    const stats = {
+    setTeamStats({
       total: members.length,
       available: members.filter((m) => m.status === "Available" || m.status === "Active").length,
-      onAssignment: members.filter((m) => m.status === "On Assignment" || m.status === "At Incident").length,
+      onAssignment: members.filter(
+        (m) => m.status === "On Assignment" || m.status === "At Incident"
+      ).length,
       resting: members.filter((m) => m.status === "Resting").length,
       offline: members.filter((m) => m.status === "Offline").length,
-    };
-    setTeamStats(stats);
+    });
   };
 
   const getStatusClass = (status) => {
@@ -208,17 +209,29 @@ function ResponseTeam() {
         progressWidth: `w-[${progress}%]`,
         eta: `ETA: ${Math.floor(Math.random() * 60 + 15)}m`,
         color:
-          priority === "Critical Priority" ? "text-[#ba1a1a]" :
-          priority === "High Priority" ? "text-[#f97316]" : "text-[#76767f]",
+          priority === "Critical Priority"
+            ? "text-[#ba1a1a]"
+            : priority === "High Priority"
+            ? "text-[#f97316]"
+            : "text-[#76767f]",
         bg:
-          priority === "Critical Priority" ? "bg-[#ba1a1a]/5" :
-          priority === "High Priority" ? "bg-[#f97316]/5" : "bg-[#fbf8fc]",
+          priority === "Critical Priority"
+            ? "bg-[#ba1a1a]/5"
+            : priority === "High Priority"
+            ? "bg-[#f97316]/5"
+            : "bg-[#fbf8fc]",
         border:
-          priority === "Critical Priority" ? "border-[#ba1a1a]/20" :
-          priority === "High Priority" ? "border-[#f97316]/20" : "border-[#76767f]/20",
+          priority === "Critical Priority"
+            ? "border-[#ba1a1a]/20"
+            : priority === "High Priority"
+            ? "border-[#f97316]/20"
+            : "border-[#76767f]/20",
         bar:
-          priority === "Critical Priority" ? "bg-[#ba1a1a]" :
-          priority === "High Priority" ? "bg-[#f97316]" : "bg-[#76767f]",
+          priority === "Critical Priority"
+            ? "bg-[#ba1a1a]"
+            : priority === "High Priority"
+            ? "bg-[#f97316]"
+            : "bg-[#76767f]",
         icon: priority === "Critical Priority" ? "warning" : null,
         incidentId: incident.id,
       };
@@ -266,13 +279,21 @@ function ResponseTeam() {
               ? "text-[#ba1a1a]"
               : "text-[#f97316]",
           title: `Incident update: ${incident.title}`,
-          description: `${incident.location || "Unknown location"} • ${index === 0 ? "Just now" : "5m ago"}`,
+          description: `${incident.location || "Unknown location"} • ${
+            index === 0 ? "Just now" : "5m ago"
+          }`,
         });
       });
     }
 
     setActivities(activitiesList.slice(0, 4));
   };
+
+  // Generate activities on mount and when incidents change
+  useEffect(() => {
+    generateActivities();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incidents]);
 
   const getUserInitials = (name) => {
     if (!name) return "V";
@@ -353,7 +374,6 @@ function ResponseTeam() {
               )}
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <StatTile value={teamStats.total} label="Total" dot="bg-[#22c55e]" color="text-[#22c55e]" />
               <StatTile value={teamStats.available} label="Available" dot="bg-[#22c55e]" color="text-[#22c55e]" />
