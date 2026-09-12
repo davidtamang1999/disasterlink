@@ -1,0 +1,293 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: DisasterLink full-stack cloud serverless production backend stack layout.
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: nodejs22.x
+    Architectures:
+    - arm64
+Resources:
+  DisasterApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowMethods: '''GET,POST,PUT,DELETE,OPTIONS'''
+        AllowHeaders: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''
+        AllowOrigin: '''*'''
+  DisasterTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: DisasterLink
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: PK
+        AttributeType: S
+      - AttributeName: SK
+        AttributeType: S
+      - AttributeName: GSI1PK
+        AttributeType: S
+      - AttributeName: GSI1SK
+        AttributeType: S
+      KeySchema:
+      - AttributeName: PK
+        KeyType: HASH
+      - AttributeName: SK
+        KeyType: RANGE
+      GlobalSecondaryIndexes:
+      - IndexName: GSI1
+        KeySchema:
+        - AttributeName: GSI1PK
+          KeyType: HASH
+        - AttributeName: GSI1SK
+          KeyType: RANGE
+        Projection:
+          ProjectionType: ALL
+  DisasterUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: DisasterLink-Users
+      UsernameAttributes:
+      - email
+      AutoVerifiedAttributes:
+      - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+          RequireUppercase: false
+      Schema:
+      - Name: role
+        AttributeDataType: String
+        Mutable: true
+      - Name: skills
+        AttributeDataType: String
+        Mutable: true
+  DisasterUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: DisasterLink-WebClient
+      UserPoolId:
+        Ref: DisasterUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+      - ALLOW_USER_PASSWORD_AUTH
+      - ALLOW_REFRESH_TOKEN_AUTH
+  DisasterImageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: disasterlink-images-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      CorsConfiguration:
+        CorsRules:
+        - AllowedHeaders:
+          - '*'
+          AllowedMethods:
+          - GET
+          - POST
+          - PUT
+          AllowedOrigins:
+          - '*'
+  DisasterAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: DisasterLink-EmergencyAlerts
+      DisplayName: DisasterLink Alerts
+  ResidentAlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn:
+        Ref: DisasterAlertsTopic
+      Protocol: email
+      Endpoint: testresident@test.com
+  DisasterPlaceIndex:
+    Type: AWS::Location::PlaceIndex
+    Properties:
+      IndexName: DisasterLink-PlaceIndex
+      DataSource: Here
+      DataSourceConfiguration:
+        IntendedUse: SingleUse
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: AuthFunction
+      Handler: index.handler
+      Environment:
+        Variables:
+          USER_POOL_ID:
+            Ref: DisasterUserPool
+          CLIENT_ID:
+            Ref: DisasterUserPoolClient
+          TABLE_NAME:
+            Ref: DisasterTable
+          NODE_OPTIONS: ' --enable-source-maps'
+      Events:
+        AuthRoutes:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: DisasterApi
+            Path: /auth/{proxy+}
+            Method: ANY
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: DisasterTable
+      - Statement:
+        - Effect: Allow
+          Action:
+          - cognito-idp:SignUp
+          - cognito-idp:InitiateAuth
+          - cognito-idp:AdminUpdateUserAttributes
+          - cognito-idp:AdminConfirmSignUp
+          Resource:
+            Fn::GetAtt:
+            - DisasterUserPool
+            - Arn
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+        - handlers/auth/index.js
+        Format: esm
+        MainFields: module,main
+        Minify: false
+        OutExtension:
+        - .js=.mjs
+        Platform: node
+        Sourcemap: true
+        Target: node22
+      SamResourceId: AuthFunction
+  IncidentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: IncidentsFunction
+      Handler: index.handler
+      Environment:
+        Variables:
+          IMAGE_BUCKET_NAME:
+            Ref: DisasterImageBucket
+          SNS_TOPIC_ARN:
+            Ref: DisasterAlertsTopic
+          PLACE_INDEX_NAME:
+            Ref: DisasterPlaceIndex
+          TABLE_NAME:
+            Ref: DisasterTable
+          NODE_OPTIONS: ' --enable-source-maps'
+      Events:
+        RootIncidents:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: DisasterApi
+            Path: /incidents
+            Method: ANY
+        ProxyIncidents:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: DisasterApi
+            Path: /incidents/{proxy+}
+            Method: ANY
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: DisasterTable
+      - S3CrudPolicy:
+          BucketName:
+            Ref: DisasterImageBucket
+      - SNSPublishMessagePolicy:
+          TopicName:
+            Fn::GetAtt:
+            - DisasterAlertsTopic
+            - TopicName
+      - Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - geo:SearchPlaceIndexForText
+          Resource:
+            Fn::GetAtt:
+            - DisasterPlaceIndex
+            - IndexArn
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+        - handlers/incidents/index.js
+        Format: esm
+        MainFields: module,main
+        Minify: false
+        OutExtension:
+        - .js=.mjs
+        Platform: node
+        Sourcemap: true
+        Target: node22
+      SamResourceId: IncidentsFunction
+  VolunteersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: VolunteersFunction
+      Handler: index.handler
+      Environment:
+        Variables:
+          TABLE_NAME:
+            Ref: DisasterTable
+          NODE_OPTIONS: ' --enable-source-maps'
+      Events:
+        RootVolunteers:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: DisasterApi
+            Path: /volunteers
+            Method: ANY
+        ProxyVolunteers:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: DisasterApi
+            Path: /volunteers/{proxy+}
+            Method: ANY
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: DisasterTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+        - handlers/volunteers/index.js
+        Format: esm
+        MainFields: module,main
+        Minify: false
+        OutExtension:
+        - .js=.mjs
+        Platform: node
+        Sourcemap: true
+        Target: node22
+      SamResourceId: VolunteersFunction
+Outputs:
+  ApiEndpoint:
+    Description: Live production API Gateway root deployment URL endpoint string layout
+      proxy.
+    Value:
+      Fn::Sub: https://${DisasterApi}.execute-api.${AWS::Region}://
+  UserPoolId:
+    Description: Cognito secure identity management user pool identifier lookup path.
+    Value:
+      Ref: DisasterUserPool
+  UserPoolClientId:
+    Description: Application browser portal verification database client access hash
+      token.
+    Value:
+      Ref: DisasterUserPoolClient
