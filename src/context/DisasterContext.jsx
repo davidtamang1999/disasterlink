@@ -1,14 +1,16 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useState, useEffect } from "react";
+import { incidentService } from "../services/incidentService";
 
 const DisasterContext = createContext();
 
 const UPDATES_KEY = "responseUpdates";
 
-// ✅ SIMULATE API DELAY - Makes it look like real cloud calls
 const simulateDelay = (ms = 800) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const DisasterProvider = ({ children }) => {
-  // Load from localStorage or use default
+  const useAWS = import.meta.env.VITE_USE_AWS === "true";
+
+  // ---------- Loaders ----------
   const loadInitialData = () => {
     const saved = localStorage.getItem("disasterData");
     if (saved) {
@@ -73,36 +75,54 @@ export const DisasterProvider = ({ children }) => {
       const saved = localStorage.getItem(UPDATES_KEY);
       return saved ? JSON.parse(saved) : [];
     } catch (e) {
-      console.error("Failed to load response updates:", e);
       return [];
     }
   };
 
-  const [incidents, setIncidents] = useState(loadInitialData);
-  const [responseUpdates, setResponseUpdates] = useState(loadInitialResponseUpdates);
+  // ---------- State ----------
+  const [incidents, setIncidents] = useState(useAWS ? [] : loadInitialData);
+  const [responseUpdates, setResponseUpdates] = useState(
+    useAWS ? [] : loadInitialResponseUpdates
+  );
   const [loading, setLoading] = useState(false);
 
-  // Save incidents to localStorage
+  // ---------- Fetch from AWS on mount (if enabled) ----------
+  useEffect(() => {
+    if (!useAWS) return;
+
+    setLoading(true);
+    Promise.all([
+      incidentService.fetchIncidents(),
+      incidentService.fetchResponseUpdates(),
+    ])
+      .then(([incData, updateData]) => {
+        setIncidents(incData);
+        setResponseUpdates(updateData);
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [useAWS]);
+
+  // ---------- Storage helpers ----------
   const saveToLocalStorage = (data) => {
     localStorage.setItem("disasterData", JSON.stringify(data));
     window.dispatchEvent(new Event("disasterDataUpdated"));
   };
 
-  // Save response updates to localStorage
   const saveUpdatesToStorage = (data) => {
     localStorage.setItem(UPDATES_KEY, JSON.stringify(data));
     window.dispatchEvent(new Event("disasterDataUpdated"));
   };
 
-  // ============================================================
-  //  EXISTING INCIDENT APIs (unchanged)
-  // ============================================================
-
+  // ---------- Derived: highest priority ----------
   const getHighestPriorityIncident = () => {
     if (!incidents || incidents.length === 0) return null;
-    return incidents.reduce((a, b) => ((a.priorityScore || 0) > (b.priorityScore || 0) ? a : b));
+    return incidents.reduce((a, b) =>
+      (a.priorityScore || 0) > (b.priorityScore || 0) ? a : b
+    );
   };
 
+  // ---------- Derived: priority summary ----------
   const getPrioritySummary = () => {
     const total = incidents.length;
     const criticalCount = incidents.filter(
@@ -123,11 +143,13 @@ export const DisasterProvider = ({ children }) => {
       low: lowCount,
       pending: pendingCount,
       averageScore: Math.round(
-        incidents.reduce((acc, curr) => acc + (curr.priorityScore || 0), 0) / (total || 1)
+        incidents.reduce((acc, curr) => acc + (curr.priorityScore || 0), 0) /
+          (total || 1)
       ),
     };
   };
 
+  // ---------- Derived: disaster situation score ----------
   const getDisasterSituationScore = () => {
     const activeIncidents = incidents.filter((inc) => inc.status !== "Resolved").length;
     const criticalIncidents = incidents.filter(
@@ -143,7 +165,10 @@ export const DisasterProvider = ({ children }) => {
     );
 
     let score = 0;
-    const incidentScore = Math.min(30, (activeIncidents / Math.max(1, incidents.length)) * 30);
+    const incidentScore = Math.min(
+      30,
+      (activeIncidents / Math.max(1, incidents.length)) * 30
+    );
     score += incidentScore;
     const criticalScore = Math.min(25, criticalIncidents * 5);
     score += criticalScore;
@@ -200,10 +225,10 @@ export const DisasterProvider = ({ children }) => {
         resourceShortages: { score: 0, max: 10, value: 0 },
       },
       summary: {
-        activeIncidents: activeIncidents,
-        criticalIncidents: criticalIncidents,
-        totalAffected: totalAffected,
-        highestWaterLevel: highestWaterLevel,
+        activeIncidents,
+        criticalIncidents,
+        totalAffected,
+        highestWaterLevel,
         resourceShortages: 0,
         totalIncidents: incidents.length,
         resolvedIncidents: incidents.filter((inc) => inc.status === "Resolved").length,
@@ -211,9 +236,21 @@ export const DisasterProvider = ({ children }) => {
     };
   };
 
+  // ============================================================
+  //  INCIDENT MUTATIONS
+  // ============================================================
+
   const addIncident = async (incidentData) => {
     setLoading(true);
     try {
+      if (useAWS) {
+        const newRecord = await incidentService.createIncident(incidentData);
+        setIncidents((prev) => [newRecord, ...prev]);
+        setLoading(false);
+        return newRecord;
+      }
+
+      // Local mode
       await simulateDelay(1200);
 
       const incidentId = `inc-${Date.now()}`;
@@ -240,7 +277,7 @@ export const DisasterProvider = ({ children }) => {
         imageUrl: incidentData.imageUrl || null,
         status: "Pending",
         priorityScore: score,
-        priorityLevel: priorityLevel,
+        priorityLevel,
         createdAt: new Date().toISOString(),
         reportedBy: incidentData.reportedBy || { id: "resident-1", name: "Resident" },
         lat: incidentData.lat || 27.7172,
@@ -252,15 +289,10 @@ export const DisasterProvider = ({ children }) => {
       const updated = [newRecord, ...incidents];
       setIncidents(updated);
       saveToLocalStorage(updated);
-
-      console.log(
-        `✅ Incident created! ID: ${incidentId}, Score: ${score}/100, Level: ${priorityLevel}`
-      );
-
       setLoading(false);
       return newRecord;
     } catch (error) {
-      console.error(error);
+      console.error("addIncident failed:", error);
       setLoading(false);
       return null;
     }
@@ -268,55 +300,96 @@ export const DisasterProvider = ({ children }) => {
 
   const deleteIncident = async (id) => {
     setLoading(true);
-    await simulateDelay(600);
-
-    const updated = incidents.filter((inc) => inc.id !== id);
-    setIncidents(updated);
-    saveToLocalStorage(updated);
-    console.log(`✅ Incident ${id} deleted`);
-    setLoading(false);
+    try {
+      if (useAWS) {
+        await incidentService.deleteIncident(id);
+        setIncidents((prev) => prev.filter((inc) => inc.id !== id));
+      } else {
+        await simulateDelay(600);
+        const updated = incidents.filter((inc) => inc.id !== id);
+        setIncidents(updated);
+        saveToLocalStorage(updated);
+      }
+    } catch (error) {
+      console.error("deleteIncident failed:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const deleteMultipleIncidents = async (ids) => {
     if (!ids || ids.length === 0) return;
     setLoading(true);
-    await simulateDelay(800);
-
-    const updated = incidents.filter((inc) => !ids.includes(inc.id));
-    setIncidents(updated);
-    saveToLocalStorage(updated);
-    console.log(`✅ ${ids.length} incidents deleted`);
-    setLoading(false);
+    try {
+      if (useAWS) {
+        await Promise.all(ids.map((id) => incidentService.deleteIncident(id)));
+        setIncidents((prev) => prev.filter((inc) => !ids.includes(inc.id)));
+      } else {
+        await simulateDelay(800);
+        const updated = incidents.filter((inc) => !ids.includes(inc.id));
+        setIncidents(updated);
+        saveToLocalStorage(updated);
+      }
+    } catch (error) {
+      console.error("deleteMultipleIncidents failed:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const updateIncidentStatus = async (id, newStatus) => {
     setLoading(true);
-    await simulateDelay(800);
-
-    const updated = incidents.map((inc) =>
-      inc.id === id ? { ...inc, status: newStatus } : inc
-    );
-    setIncidents(updated);
-    saveToLocalStorage(updated);
-    console.log(`✅ Incident ${id} status updated to: ${newStatus}`);
-    setLoading(false);
+    try {
+      if (useAWS) {
+        const updatedRecord = await incidentService.updateIncident(id, {
+          status: newStatus,
+        });
+        setIncidents((prev) =>
+          prev.map((inc) => (inc.id === id ? updatedRecord : inc))
+        );
+      } else {
+        await simulateDelay(800);
+        const updated = incidents.map((inc) =>
+          inc.id === id ? { ...inc, status: newStatus } : inc
+        );
+        setIncidents(updated);
+        saveToLocalStorage(updated);
+      }
+    } catch (error) {
+      console.error("updateIncidentStatus failed:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const updateIncident = async (id, updatedData) => {
     setLoading(true);
-    await simulateDelay(800);
-
-    const updated = incidents.map((inc) =>
-      inc.id === id ? { ...inc, ...updatedData } : inc
-    );
-    setIncidents(updated);
-    saveToLocalStorage(updated);
-    console.log(`✅ Incident ${id} updated`);
-    setLoading(false);
+    try {
+      if (useAWS) {
+        const updatedRecord = await incidentService.updateIncident(id, updatedData);
+        setIncidents((prev) =>
+          prev.map((inc) => (inc.id === id ? updatedRecord : inc))
+        );
+      } else {
+        await simulateDelay(800);
+        const updated = incidents.map((inc) =>
+          inc.id === id ? { ...inc, ...updatedData } : inc
+        );
+        setIncidents(updated);
+        saveToLocalStorage(updated);
+      }
+    } catch (error) {
+      console.error("updateIncident failed:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const uploadIncidentImage = async (file) => {
     if (!file) return null;
+    if (useAWS) {
+      return incidentService.uploadImage(file);
+    }
     await simulateDelay(1500);
     return "https://unsplash.com";
   };
@@ -330,61 +403,92 @@ export const DisasterProvider = ({ children }) => {
   };
 
   // ============================================================
-  //  RESPONSE UPDATES API (new)
+  //  RESPONSE UPDATE MUTATIONS
   // ============================================================
 
   const addResponseUpdate = async (data) => {
     setLoading(true);
-    await simulateDelay(800);
+    try {
+      if (useAWS) {
+        const newUpdate = await incidentService.createResponseUpdate(data);
+        setResponseUpdates((prev) => [newUpdate, ...prev]);
+        return newUpdate;
+      }
 
-    const newUpdate = {
-      id: `update-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      type: data.type || "Field Report",
-      title: data.title || "Field Update",
-      description: data.description || "",
-      location: data.location || "Unknown location",
-      team: data.team || "Unassigned",
-      severity: data.severity || "Moderate",
-      status: data.status || "Active",
-      incidentId: data.incidentId || null,
-      userId: data.userId || null,
-      userName: data.userName || "Anonymous",
-      timestamp: new Date().toISOString(),
-      isCritical: data.type === "Critical",
-    };
+      await simulateDelay(800);
 
-    const updated = [newUpdate, ...responseUpdates];
-    setResponseUpdates(updated);
-    saveUpdatesToStorage(updated);
+      const newUpdate = {
+        id: `update-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: data.type || "Field Report",
+        title: data.title || "Field Update",
+        description: data.description || "",
+        location: data.location || "Unknown location",
+        team: data.team || "Unassigned",
+        severity: data.severity || "Moderate",
+        status: data.status || "Active",
+        incidentId: data.incidentId || null,
+        userId: data.userId || null,
+        userName: data.userName || "Anonymous",
+        timestamp: new Date().toISOString(),
+        isCritical: data.type === "Critical",
+      };
 
-    console.log(`✅ Response update created: ${newUpdate.id}`);
-    setLoading(false);
-    return newUpdate;
+      const updated = [newUpdate, ...responseUpdates];
+      setResponseUpdates(updated);
+      saveUpdatesToStorage(updated);
+      return newUpdate;
+    } catch (error) {
+      console.error("addResponseUpdate failed:", error);
+      return null;
+    } finally {
+      setLoading(false);
+    }
   };
 
   const updateResponseUpdate = async (id, patch) => {
     setLoading(true);
-    await simulateDelay(600);
+    try {
+      if (useAWS) {
+        const updated = await incidentService.updateResponseUpdate(id, patch);
+        setResponseUpdates((prev) =>
+          prev.map((u) => (u.id === id ? updated : u))
+        );
+        return updated;
+      }
 
-    const updated = responseUpdates.map((u) =>
-      u.id === id ? { ...u, ...patch, updatedAt: new Date().toISOString() } : u
-    );
-    setResponseUpdates(updated);
-    saveUpdatesToStorage(updated);
+      await simulateDelay(600);
 
-    setLoading(false);
-    return updated.find((u) => u.id === id);
+      const updated = responseUpdates.map((u) =>
+        u.id === id ? { ...u, ...patch, updatedAt: new Date().toISOString() } : u
+      );
+      setResponseUpdates(updated);
+      saveUpdatesToStorage(updated);
+      return updated.find((u) => u.id === id);
+    } catch (error) {
+      console.error("updateResponseUpdate failed:", error);
+      return null;
+    } finally {
+      setLoading(false);
+    }
   };
 
   const deleteResponseUpdate = async (id) => {
     setLoading(true);
-    await simulateDelay(500);
-
-    const updated = responseUpdates.filter((u) => u.id !== id);
-    setResponseUpdates(updated);
-    saveUpdatesToStorage(updated);
-
-    setLoading(false);
+    try {
+      if (useAWS) {
+        await incidentService.deleteResponseUpdate(id);
+        setResponseUpdates((prev) => prev.filter((u) => u.id !== id));
+      } else {
+        await simulateDelay(500);
+        const updated = responseUpdates.filter((u) => u.id !== id);
+        setResponseUpdates(updated);
+        saveUpdatesToStorage(updated);
+      }
+    } catch (error) {
+      console.error("deleteResponseUpdate failed:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getUpdatesByIncident = (incidentId) =>
@@ -394,7 +498,13 @@ export const DisasterProvider = ({ children }) => {
     responseUpdates.filter((u) => u.userId === userId);
 
   const getLatestCriticalUpdate = () =>
-    responseUpdates.find((u) => u.type === "Critical") || responseUpdates[0] || null;
+    responseUpdates.find((u) => u.type === "Critical") ||
+    responseUpdates[0] ||
+    null;
+
+  // ============================================================
+  //  PROVIDER
+  // ============================================================
 
   return (
     <DisasterContext.Provider
@@ -413,7 +523,7 @@ export const DisasterProvider = ({ children }) => {
         getPrioritySummary,
         getDisasterSituationScore,
 
-        // Response Updates API (new)
+        // Response Updates API
         responseUpdates,
         addResponseUpdate,
         updateResponseUpdate,
@@ -430,8 +540,6 @@ export const DisasterProvider = ({ children }) => {
 
 export const useDisaster = () => {
   const context = useContext(DisasterContext);
-  if (!context) {
-    throw new Error("useDisaster must be used within a DisasterProvider");
-  }
+  if (!context) throw new Error("useDisaster must be used within a DisasterProvider");
   return context;
 };
