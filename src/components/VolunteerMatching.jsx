@@ -1,17 +1,29 @@
 import { useState, useEffect } from "react";
 import { useUsers } from "../context/UserContext";
+import { useDisaster } from "../context/DisasterContext";
+import { useToast } from "./shared";
 
-const VolunteerMatching = ({ incidentId, incidentType, incidentLat, incidentLng, limit = 5 }) => {
+const VolunteerMatching = ({
+  incidentId,
+  incidentType,
+  incidentLat,
+  incidentLng,
+  limit = 5,
+  onAssigned,
+}) => {
   const { volunteers } = useUsers();
+  const { updateIncident } = useDisaster();
+  const toast = useToast();
   const [matchedVolunteers, setMatchedVolunteers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [assigning, setAssigning] = useState(null);
 
   // Calculate distance between two coordinates
   const calculateDistance = (lat1, lng1, lat2, lng2) => {
     if (!lat1 || !lng1 || !lat2 || !lng2) return 999;
     const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLng = ((lng2 - lng1) * Math.PI) / 180;
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos((lat1 * Math.PI) / 180) *
@@ -98,7 +110,6 @@ const VolunteerMatching = ({ incidentId, incidentType, incidentLat, incidentLng,
       const requiredSkills = getRequiredSkills(incidentType || "Other");
 
       const matches = (volunteers || []).map((volunteer) => {
-        // Try common coordinate field names
         const volunteerLat = volunteer.lat ?? null;
         const volunteerLng = volunteer.lng ?? null;
 
@@ -116,7 +127,7 @@ const VolunteerMatching = ({ incidentId, incidentType, incidentLat, incidentLng,
           skillsMatchedCount: matchResult.skillsMatchedCount,
           totalRequiredSkills: matchResult.totalRequiredSkills,
           distance: distance ? Math.round(distance * 10) / 10 : "N/A",
-          activeAssignments: 0, // TODO: derive from incidents when assignment UI exists
+          activeAssignments: 0,
           availabilityStatus: volunteer.status || volunteer.availability || "Available",
           isAvailable:
             volunteer.status === "Available" ||
@@ -138,6 +149,28 @@ const VolunteerMatching = ({ incidentId, incidentType, incidentLat, incidentLng,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incidentId, incidentType, incidentLat, incidentLng, volunteers]);
+
+  // ---------- Assign volunteer to incident ----------
+  const handleAssign = async (volunteer) => {
+    if (!incidentId) {
+      toast.error("No incident selected");
+      return;
+    }
+    setAssigning(volunteer.id);
+    try {
+      await updateIncident(incidentId, {
+        assignedTo: volunteer.id,
+        status: "In Progress",
+      });
+      toast.success(`${volunteer.fullName || "Volunteer"} assigned to incident`);
+      onAssigned?.(volunteer);
+    } catch (err) {
+      console.error("Assign failed:", err);
+      toast.error("Failed to assign volunteer");
+    } finally {
+      setAssigning(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -265,8 +298,14 @@ const VolunteerMatching = ({ incidentId, incidentType, incidentLat, incidentLng,
             </div>
 
             <div className="mt-3 flex gap-2">
-              <button className="text-xs font-semibold text-[#4b41e1] hover:underline">
-                Assign to Incident
+              <button
+                onClick={() => handleAssign(volunteer)}
+                disabled={assigning === volunteer.id}
+                className={`text-xs font-semibold hover:underline ${
+                  assigning === volunteer.id ? "text-gray-400" : "text-[#4b41e1]"
+                }`}
+              >
+                {assigning === volunteer.id ? "Assigning..." : "Assign to Incident"}
               </button>
               <button className="text-xs text-[#45464e] hover:underline">
                 View Profile
