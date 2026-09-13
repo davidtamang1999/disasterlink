@@ -3,6 +3,7 @@ import VolunteerLayout from "../../layouts/VolunteerLayout";
 import { useDisaster } from "../../context/DisasterContext";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../components/shared";
+import { incidentService } from "../../services/incidentService";
 
 function MyTasks() {
   const { incidents, updateIncident } = useDisaster();
@@ -13,25 +14,51 @@ function MyTasks() {
   const [fieldUpdate, setFieldUpdate] = useState("");
   const [peopleAssisted, setPeopleAssisted] = useState("");
   const [resourcesUsed, setResourcesUsed] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const myTasks = incidents.length > 0 ? incidents : [];
+  // Filter: incidents assigned to this volunteer OR in their district
+  const myTasks = incidents.filter((inc) => {
+    const assignedToMe =
+      inc.assignedTo === user?.id ||
+      inc.assignedTo === user?.email ||
+      (Array.isArray(inc.responders) && inc.responders.includes(user?.id));
+
+    const inMyDistrict =
+      user?.district &&
+      inc.district &&
+      inc.district.toLowerCase() === user.district.toLowerCase();
+
+    // Also include incidents from report location matching user district
+    const locationMatches =
+      user?.district &&
+      inc.location &&
+      inc.location.toLowerCase().includes(user.district.toLowerCase());
+
+    return assignedToMe || inMyDistrict || locationMatches;
+  });
+
+  // If no matches, fall back to all open incidents so the page isn't empty
+  const displayedTasks = myTasks.length > 0
+    ? myTasks
+    : incidents.filter((inc) => inc.status !== "Resolved");
 
   // ---------- Stats ----------
-  const assignedCount = myTasks.filter((t) =>
+  const assignedCount = displayedTasks.filter((t) =>
     t.status === "Pending" || t.status === "Under Review" || t.status === "Submitted"
   ).length;
 
-  const inProgressCount = myTasks.filter((t) =>
+  const inProgressCount = displayedTasks.filter((t) =>
     t.status === "In Progress" || t.status === "Responding"
   ).length;
 
-  const completedCount = myTasks.filter((t) => t.status === "Resolved").length;
+  const completedCount = displayedTasks.filter((t) => t.status === "Resolved").length;
 
-  const highPriorityCount = myTasks.filter(
+  const highPriorityCount = displayedTasks.filter(
     (t) => t.severity === "Critical" || t.severity === "CRITICAL" || t.severity === "High"
   ).length;
 
-  const selectedTask = myTasks.find((t) => t.id === selectedTaskId) || myTasks[0];
+  const selectedTask =
+    displayedTasks.find((t) => t.id === selectedTaskId) || displayedTasks[0];
 
   // ---------- Styling helpers ----------
   const getStatusColor = (status) => {
@@ -60,20 +87,48 @@ function MyTasks() {
   // ---------- Status update ----------
   const handleStatusUpdate = async (newStatus) => {
     if (!selectedTask) return;
-    await updateIncident(selectedTask.id, { status: newStatus });
-    toast.success(`Task status updated to: ${newStatus}`);
+    try {
+      await updateIncident(selectedTask.id, { status: newStatus });
+      toast.success(`Task status updated to: ${newStatus}`);
+    } catch (err) {
+      toast.error("Failed to update status");
+    }
   };
 
-  // ---------- Field update ----------
-  const handleFieldUpdate = () => {
+  // ---------- Field update (real submit) ----------
+  const handleFieldUpdate = async () => {
     if (!fieldUpdate.trim()) {
       toast.error("Please add a status update.");
       return;
     }
-    toast.success("Field update submitted successfully!");
-    setFieldUpdate("");
-    setPeopleAssisted("");
-    setResourcesUsed("");
+    if (!selectedTask) {
+      toast.error("No task selected.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await incidentService.createResponseUpdate({
+        incidentId: selectedTask.id,
+        userId: user?.id,
+        userName: user?.fullName || user?.name || "Volunteer",
+        title: `Field update — ${selectedTask.title || "Incident"}`,
+        description: fieldUpdate.trim(),
+        peopleAssisted: parseInt(peopleAssisted) || 0,
+        resourcesUsed: resourcesUsed || "",
+        status: "Submitted",
+      });
+
+      toast.success("Field update submitted successfully!");
+      setFieldUpdate("");
+      setPeopleAssisted("");
+      setResourcesUsed("");
+    } catch (err) {
+      console.error("Field update failed:", err);
+      toast.error("Failed to submit field update. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -83,7 +138,9 @@ function MyTasks() {
         <div>
           <h2 className="text-3xl font-bold text-[#1b1b1e]">My Tasks</h2>
           <p className="mt-1 text-gray-600">
-            View and manage your assigned disaster-response tasks.
+            {myTasks.length > 0
+              ? "Tasks assigned to you or in your district."
+              : "Open incidents in your area."}
           </p>
         </div>
 
@@ -154,8 +211,8 @@ function MyTasks() {
           </div>
 
           {/* Task list */}
-          {myTasks.length > 0 ? (
-            myTasks.map((task, index) => {
+          {displayedTasks.length > 0 ? (
+            displayedTasks.map((task, index) => {
               const isSelected =
                 selectedTaskId === task.id || (index === 0 && !selectedTaskId);
               const severityColor = getSeverityColor(task.severity);
@@ -201,8 +258,8 @@ function MyTasks() {
                     <div className="text-right">
                       <span className="flex items-center gap-1 text-xs text-gray-500">
                         <span className="material-symbols-outlined text-[16px]">schedule</span>
-                        {task.timestamp
-                          ? new Date(task.timestamp).toLocaleString("en-US", {
+                        {task.timestamp || task.createdAt
+                          ? new Date(task.timestamp || task.createdAt).toLocaleString("en-US", {
                               month: "short",
                               day: "numeric",
                               hour: "2-digit",
@@ -227,8 +284,8 @@ function MyTasks() {
                           {task.location || "Unknown location"}
                         </div>
                         <div className="text-sm text-gray-500">
-                          {task.coordinates
-                            ? `${task.coordinates.lat}, ${task.coordinates.lng}`
+                          {task.lat && task.lng
+                            ? `${task.lat.toFixed(3)}, ${task.lng.toFixed(3)}`
                             : "Location pending"}
                         </div>
                       </div>
@@ -253,8 +310,8 @@ function MyTasks() {
                     </span>
                     <span className="text-xs text-gray-500">
                       Reported:{" "}
-                      {task.timestamp
-                        ? new Date(task.timestamp).toLocaleDateString()
+                      {task.timestamp || task.createdAt
+                        ? new Date(task.timestamp || task.createdAt).toLocaleDateString()
                         : "N/A"}
                     </span>
                   </div>
@@ -264,8 +321,8 @@ function MyTasks() {
           ) : (
             <div className="rounded-[20px] bg-white p-12 text-center shadow-sm">
               <span className="material-symbols-outlined text-5xl text-gray-300">assignment</span>
-              <p className="mt-4 text-gray-500">No tasks assigned yet.</p>
-              <p className="text-sm text-gray-400">Check back later for assignments.</p>
+              <p className="mt-4 text-gray-500">No tasks available.</p>
+              <p className="text-sm text-gray-400">Check back later for new incidents.</p>
             </div>
           )}
         </div>
@@ -381,22 +438,16 @@ function MyTasks() {
                       </div>
                     </div>
 
-                    <div className="flex gap-2">
-                      <button className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-gray-200 bg-white py-2 text-xs text-gray-600">
-                        <span className="material-symbols-outlined text-[16px]">photo_camera</span>
-                        Photo
-                      </button>
-                      <button className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-gray-200 bg-white py-2 text-xs text-gray-600">
-                        <span className="material-symbols-outlined text-[16px]">my_location</span>
-                        GPS Location
-                      </button>
-                    </div>
-
                     <button
                       onClick={handleFieldUpdate}
-                      className="w-full rounded-lg bg-[#4b41e1] py-2 font-semibold text-white hover:bg-[#4037c9]"
+                      disabled={submitting}
+                      className={`w-full rounded-lg py-2 font-semibold text-white transition ${
+                        submitting
+                          ? "cursor-not-allowed bg-gray-400"
+                          : "bg-[#4b41e1] hover:bg-[#4037c9]"
+                      }`}
                     >
-                      Update Current Status
+                      {submitting ? "Submitting..." : "Update Current Status"}
                     </button>
                   </div>
                 </div>
@@ -436,8 +487,8 @@ function MyTasks() {
                     <div className="mb-1 flex justify-between">
                       <span className="text-sm font-bold text-[#4b41e1]">Reported</span>
                       <span className="text-xs text-gray-500">
-                        {selectedTask.timestamp
-                          ? new Date(selectedTask.timestamp).toLocaleString("en-US", {
+                        {selectedTask.timestamp || selectedTask.createdAt
+                          ? new Date(selectedTask.timestamp || selectedTask.createdAt).toLocaleString("en-US", {
                               hour: "2-digit",
                               minute: "2-digit",
                             })
