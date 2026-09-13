@@ -4,6 +4,7 @@ import { useDisaster } from "../../context/DisasterContext";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../components/shared";
 import geocodeLocation from "../../utils/geocode";
+import { incidentService } from "../../services/incidentService";
 
 export default function ReportDisaster() {
   const { addIncident } = useDisaster();
@@ -23,6 +24,9 @@ export default function ReportDisaster() {
   const [incidentType, setIncidentType] = useState("Urban Flooding");
   const [urgentAssistance, setUrgentAssistance] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [evidenceFile, setEvidenceFile] = useState(null);
+  const [evidencePreview, setEvidencePreview] = useState(null);
+  const [uploading, setUploading] = useState(false);
 
   const eventOptions = [
     "Water Rising",
@@ -45,10 +49,41 @@ export default function ReportDisaster() {
     );
   };
 
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("File too large. Max 5MB.");
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      toast.error("Only image files are allowed.");
+      return;
+    }
+
+    setEvidenceFile(file);
+    setEvidencePreview(URL.createObjectURL(file));
+  };
+
   const handleSubmit = async () => {
     setIsSubmitting(true);
 
     try {
+      // Upload evidence file to S3 first (if any)
+      let imageUrl = null;
+      if (evidenceFile) {
+        setUploading(true);
+        try {
+          imageUrl = await incidentService.uploadImage(evidenceFile);
+        } catch (err) {
+          console.error("S3 upload failed:", err);
+          toast.error("Image upload failed — submitting without photo.");
+        } finally {
+          setUploading(false);
+        }
+      }
+
       let lat = 27.7172;
       let lng = 85.324;
 
@@ -81,6 +116,7 @@ export default function ReportDisaster() {
         lng,
         description: description || "",
         evidence: [],
+        imageUrl: imageUrl,
         reportedBy: {
           id: user?.id || "resident-1",
           name: user?.name || user?.fullName || "Resident",
@@ -110,6 +146,8 @@ export default function ReportDisaster() {
         setRoadAccess("Blocked");
         setEvacuation("");
         setSelectedEvents(["People Trapped", "Road Blocked"]);
+        setEvidenceFile(null);
+        setEvidencePreview(null);
       } else {
         toast.error("Failed to submit report. Please try again.");
       }
@@ -371,19 +409,45 @@ export default function ReportDisaster() {
                 </Field>
 
                 <Field label="Upload Evidence">
-                  <div className="cursor-pointer rounded-xl border-2 border-dashed border-slate-300 p-8 text-center transition hover:bg-slate-50">
-                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100">
-                      <span className="material-symbols-outlined text-indigo-600">
-                        cloud_upload
-                      </span>
-                    </div>
-                    <p className="mb-1 text-sm font-semibold">
-                      Click to upload or drag and drop
-                    </p>
-                    <p className="text-sm text-slate-500">
-                      Photos, Videos, or Documents (max. 50MB)
-                    </p>
-                  </div>
+                  <input
+                    id="evidence-upload"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
+                  <label
+                    htmlFor="evidence-upload"
+                    className="block cursor-pointer rounded-xl border-2 border-dashed border-slate-300 p-8 text-center transition hover:bg-slate-50"
+                  >
+                    {evidencePreview ? (
+                      <div>
+                        <img
+                          src={evidencePreview}
+                          alt="Evidence preview"
+                          className="mx-auto mb-3 max-h-48 rounded-lg object-contain"
+                        />
+                        <p className="text-sm font-semibold text-indigo-600">
+                          {evidenceFile?.name}
+                        </p>
+                        <p className="text-xs text-slate-500">Click to change</p>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100">
+                          <span className="material-symbols-outlined text-indigo-600">
+                            cloud_upload
+                          </span>
+                        </div>
+                        <p className="mb-1 text-sm font-semibold">
+                          Click to upload or drag and drop
+                        </p>
+                        <p className="text-sm text-slate-500">
+                          Images only (max 5MB)
+                        </p>
+                      </div>
+                    )}
+                  </label>
                 </Field>
               </div>
             </div>
@@ -490,7 +554,11 @@ export default function ReportDisaster() {
             <span className="material-symbols-outlined">
               {isSubmitting ? "hourglass_empty" : "send"}
             </span>
-            {isSubmitting ? "Submitting..." : "Submit Emergency Report"}
+            {isSubmitting
+              ? uploading
+                ? "Uploading photo..."
+                : "Submitting..."
+              : "Submit Emergency Report"}
           </button>
         </div>
       </div>
